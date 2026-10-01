@@ -59,3 +59,6 @@ scripts/testServer.ts
 # AI Prompts
 **/*PLAN*.md
 **/AGENT.md
+
+# Docs
+docs/*
