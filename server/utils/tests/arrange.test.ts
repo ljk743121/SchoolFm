@@ -58,13 +58,43 @@ describe("scheduleSongs", () => {
     expect(result.dropped.length).toBe(0);
   });
 
-  it("期望日期早于开始日期（期望日已过）时按自由分配处理", () => {
+  it("期望日期早于开始日期时作为欠播顺延补播", () => {
     const songs = [
       song(1, 180, { expectedDate: D(-3), createdAt: new Date("2026-01-01T00:00:00Z") }),
     ];
     const result = scheduleSongs(songs, D(0), D(0));
     expect(result.assignments[D(0)]).toStrictEqual([1]);
     expect(result.conflicts.length).toBe(0);
+  });
+
+  it("期望日早于区间起点时顺延到区间最早可用日", () => {
+    const songs = [
+      song(1, 180, { expectedDate: D(1), createdAt: new Date("2026-01-01T00:00:00Z") }),
+    ];
+    // 排下一周窗口（D(5)~D(8)），不含仍在未来的期望日 D(1)，应被顺延补播而非落选
+    const result = scheduleSongs(songs, D(5), D(8));
+    expect(result.assignments[D(5)]).toStrictEqual([1]);
+    expect(result.dropped.length).toBe(0);
+  });
+
+  it("欠播歌曲优先于无期望日期的自由歌曲，且跳过不可用日", () => {
+    const songs = [
+      song(1, 180, { createdAt: new Date("2026-01-02T00:00:00Z") }), // 自由分配，早投稿
+      song(2, 180, { expectedDate: D(1), createdAt: new Date("2026-01-03T00:00:00Z") }), // 欠播，晚投稿
+    ];
+    const result = scheduleSongs(songs, D(5), D(6), { unavailableDates: [D(5)] });
+    expect(result.assignments[D(6)]).toStrictEqual([2, 1]);
+    expect(result.dropped.length).toBe(0);
+  });
+
+  it("欠播歌曲按期望日先后补播，忽略 dropped 降级", () => {
+    const songs = [
+      song(1, 180, { expectedDate: D(3), priority: 1, createdAt: new Date("2026-01-01T00:00:00Z") }), // approved，期望较晚
+      song(2, 180, { expectedDate: D(1), priority: 2, createdAt: new Date("2026-01-02T00:00:00Z") }), // dropped，期望较早
+    ];
+    const result = scheduleSongs(songs, D(5), D(5));
+    expect(result.assignments[D(5)]).toStrictEqual([2, 1]);
+    expect(result.dropped.length).toBe(0);
   });
 
   it("期望日期等于当天不算已过，仍安排在当天", () => {
@@ -168,7 +198,8 @@ describe("scheduleSongs", () => {
       ],
     });
     const day = result.assignments[D(1)] ?? [];
-    expect(day).toStrictEqual([99, 2]);
+    // 重排后按投稿时间排序：2 投稿更早，排在已有歌曲 99 之前
+    expect(day).toStrictEqual([2, 99]);
     expect(result.dropped.length).toBe(1);
   });
 
@@ -194,5 +225,99 @@ describe("scheduleSongs", () => {
     // 45 分钟容量仅够一首 25 分钟歌曲，dropped（priority 2）优先被安排，failed 被丢弃
     expect(day).toStrictEqual([2]);
     expect(result.dropped).toStrictEqual([1]);
+  });
+
+  it("未排满时欠播歌曲就近占空位，不抢占已有排期", () => {
+    const songs = [
+      song(1, 300, { expectedDate: D(1), priority: 2, createdAt: new Date("2026-01-01T00:00:00Z") }),
+    ];
+    const result = scheduleSongs(songs, D(5), D(6), {
+      existingAssignments: { [D(5)]: [99] },
+      existingSongs: [
+        { id: 99, duration: MAX_DAILY_SONG_DURATION, expectedPlayDate: null, createdAt: new Date(), priority: 0 },
+      ],
+    });
+    // D(5) 已满但 D(6) 有空位，应占空位而非抢占 99
+    expect(result.assignments[D(5)]).toStrictEqual([99]);
+    expect(result.assignments[D(6)]).toStrictEqual([1]);
+    expect(result.evicted).toStrictEqual([]);
+    expect(result.dropped.length).toBe(0);
+  });
+
+  it("整个区间排满时，欠播歌曲抢占无期望日期的普通歌曲", () => {
+    const songs = [
+      song(1, 300, { expectedDate: D(1), priority: 2, createdAt: new Date("2026-01-01T00:00:00Z") }),
+    ];
+    const result = scheduleSongs(songs, D(5), D(5), {
+      existingAssignments: { [D(5)]: [99] },
+      existingSongs: [
+        { id: 99, duration: 2600, expectedPlayDate: null, createdAt: new Date(), priority: 0 },
+      ],
+    });
+    // 全区间仅 D(5) 且已排满，欠播歌曲应挤占普通歌曲 99
+    expect(result.assignments[D(5)]).toStrictEqual([1]);
+    expect(result.evicted).toStrictEqual([99]);
+    expect(result.dropped.length).toBe(0);
+  });
+
+  it("抢占时不会移除已有期望日期的歌曲", () => {
+    const songs = [
+      song(1, 300, { expectedDate: D(1), priority: 2, createdAt: new Date("2026-01-01T00:00:00Z") }),
+    ];
+    const result = scheduleSongs(songs, D(5), D(5), {
+      existingAssignments: { [D(5)]: [99, 98] },
+      existingSongs: [
+        { id: 99, duration: 2600, expectedPlayDate: null, createdAt: new Date(), priority: 0 },
+        { id: 98, duration: 90, expectedPlayDate: D(4), createdAt: new Date(), priority: 0 },
+      ],
+    });
+    // 仅有 99 可被抢占，98 带期望日期应保留
+    expect(result.evicted).toStrictEqual([99]);
+    expect(result.assignments[D(5)]).toContain(98);
+    expect(result.assignments[D(5)]).toContain(1);
+  });
+
+  it("抢占时优先挤出无期望日期的歌曲，带期望日期的歌曲不被挤出", () => {
+    const songs = [
+      song(3, 300, { expectedDate: D(1), priority: 2, createdAt: new Date("2026-01-01T00:00:00Z") }),
+    ];
+    const result = scheduleSongs(songs, D(5), D(5), {
+      existingAssignments: { [D(5)]: [1, 2] },
+      existingSongs: [
+        { id: 1, duration: 1400, expectedPlayDate: D(5), createdAt: new Date(), priority: 0 },
+        { id: 2, duration: 1200, expectedPlayDate: null, createdAt: new Date(), priority: 0 },
+      ],
+    });
+    // 仅无期望日期的 2 被挤出，带期望日期的 1 保留
+    expect(result.evicted).toStrictEqual([2]);
+    expect(result.assignments[D(5)]).toContain(1);
+    expect(result.assignments[D(5)]).toContain(3);
+  });
+
+  it("顺延的欠播歌曲排在无期望日期的自由歌曲之前", () => {
+    const songs = [
+      song(5, 300, { expectedDate: D(1), priority: 2, createdAt: new Date("2026-01-01T00:00:00Z") }),
+    ];
+    const result = scheduleSongs(songs, D(5), D(5), {
+      existingAssignments: { [D(5)]: [10] },
+      existingSongs: [
+        { id: 10, duration: 2000, expectedPlayDate: null, createdAt: new Date(), priority: 0 },
+      ],
+    });
+    expect(result.assignments[D(5)]).toStrictEqual([5, 10]);
+  });
+
+  it("正好命中当天期望日的歌曲排在被顺延歌曲之前", () => {
+    // D(5)/D(6) 已满被顺延到 D(7)，与期望 D(7) 的歌曲同属档位 0
+    const result = scheduleSongs([], D(3), D(7), {
+      existingAssignments: { [D(7)]: [1, 2, 3, 4] },
+      existingSongs: [
+        { id: 1, duration: 180, expectedPlayDate: D(5), createdAt: new Date("2026-01-01T00:00:00Z"), priority: 1 },
+        { id: 2, duration: 180, expectedPlayDate: D(6), createdAt: new Date("2026-01-02T00:00:00Z"), priority: 1 },
+        { id: 3, duration: 180, expectedPlayDate: D(7), createdAt: new Date("2026-01-03T00:00:00Z"), priority: 1 },
+        { id: 4, duration: 180, expectedPlayDate: D(7), createdAt: new Date("2026-01-04T00:00:00Z"), priority: 1 },
+      ],
+    });
+    expect(result.assignments[D(7)]).toStrictEqual([3, 4, 1, 2]);
   });
 });

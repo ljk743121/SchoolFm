@@ -161,12 +161,8 @@
             </TabsTrigger>
             <TabsTrigger
               value="notification"
-              :disabled="!userStore.loggedIn"
               :class="{ 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200': hasNewAnnouncement }"
-              @click="() => {
-                hasNewAnnouncement = false;
-                updateLoginTime();
-              }"
+              @click="handleNotificationTab"
             >
               通知
             </TabsTrigger>
@@ -256,6 +252,7 @@
               <SongCard
                 :song
                 is-arrangement
+                :play-time="arrangementPlayTimes.get(song.id)"
                 :is-playing="isTrackPlaying(song.id)"
                 @song-export="playMusic"
               />
@@ -263,15 +260,10 @@
           </ul>
         </TabsContent>
         <TabsContent value="notification" class="flex-1">
-          <div v-if="isAnnouncementListPending">
+          <div v-if="isNotificationPending">
             <Icon name="lucide:loader-2" size="20" class="animate-spin" />
           </div>
-          <LazyHomeAnnouncement
-            v-else
-            :announcement-list="userStore.announcementCache && userStore.announcementCache.length > 0
-              ? userStore.announcementCache
-              : announcementList!"
-          />
+          <LazyHomeAnnouncement v-else :announcement-list="notificationList" />
         </TabsContent>
       </Tabs>
     </section>
@@ -298,7 +290,7 @@ import type { RouterOutput } from "~~/types";
 import type { TPlayerTrack } from "~/composables/useMusicPlayer";
 import { useFuse, type UseFuseOptions } from "@vueuse/integrations/useFuse";
 import { DatePicker } from "@ztl-uwu/v-calendar";
-import { getImgUrl, SCHOOL_NAME } from "~~/constants";
+import { getImgUrl, SCHOOL_NAME, START_TIME } from "~~/constants";
 // import { fetchMusicUrl } from "~~/deprecate/shared/plugin";
 
 useSeoMeta({
@@ -440,6 +432,33 @@ const { data: announcementHash, suspense: announcementHashSuspense } = useQuery(
   enabled: userStore.loggedIn,
 });
 
+const { data: publicAnnouncement, isPending: isPublicAnnouncementPending } = useQuery({
+  queryFn: () => $trpc.announcement.latestPublic.query(),
+  queryKey: ["announcement.latestPublic"],
+  refetchIntervalInBackground: false,
+  refetchOnWindowFocus: false,
+  enabled: !userStore.loggedIn,
+});
+
+const notificationList = computed<RouterOutput["announcement"]["listSafe"]>(() => {
+  if (userStore.loggedIn) {
+    return userStore.announcementCache && userStore.announcementCache.length > 0
+      ? userStore.announcementCache
+      : announcementList.value ?? [];
+  }
+  return publicAnnouncement.value ? [publicAnnouncement.value] : [];
+});
+
+const isNotificationPending = computed(() =>
+  userStore.loggedIn ? isAnnouncementListPending.value : isPublicAnnouncementPending.value,
+);
+
+function handleNotificationTab() {
+  hasNewAnnouncement.value = false;
+  if (userStore.loggedIn)
+    updateLoginTime();
+}
+
 function getDateString(date: Date) {
   return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, "0")}-${date.getDate().toString().padStart(2, "0")}`;
 }
@@ -452,6 +471,24 @@ const currentArrangement = computed(() => {
 const arrangementListSongs = computed(() => {
   return currentArrangement.value?.songs || [];
 });
+
+/** 每首歌的预计播放时间（HH:mm），从每天开始播放时间起按顺序累加前面歌曲时长 */
+const arrangementPlayTimes = computed(() => {
+  const result = new Map<number, string>();
+  const [startHour, startMinute] = START_TIME.split(":").map(Number);
+  let seconds = (startHour ?? 0) * 3600 + (startMinute ?? 0) * 60;
+  for (const song of arrangementListSongs.value) {
+    result.set(song.id, formatPlayTime(seconds));
+    seconds += song.duration ?? 0;
+  }
+  return result;
+});
+
+function formatPlayTime(seconds: number) {
+  const hh = String(Math.floor(seconds / 3600) % 24).padStart(2, "0");
+  const mm = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
 
 const arrangementUnplayedCount = computed(() => {
   return (currentArrangement.value?.songs || []).filter(

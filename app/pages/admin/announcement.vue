@@ -41,6 +41,9 @@
                     <SelectItem value="all">
                       所有人可见
                     </SelectItem>
+                    <SelectItem value="public">
+                      仅未登录用户可见
+                    </SelectItem>
                   </SelectGroup>
                 </SelectContent>
               </Select>
@@ -95,7 +98,7 @@
                   <TableCell>{{ item.creatorId }} ({{ item.creatorName }})</TableCell>
                   <TableCell>
                     <Badge variant="secondary">
-                      {{ item.visible === "all" ? "公开" : "管理员可见" }}
+                      {{ visibleLabel(item.visible) }}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -238,6 +241,14 @@ function formatDate(date: Date): string {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function visibleLabel(visible: string): string {
+  if (visible === "public")
+    return "仅未登录可见";
+  if (visible === "all")
+    return "公开";
+  return "管理员可见";
 }
 
 const { data: announcementList, isPending } = useQuery({

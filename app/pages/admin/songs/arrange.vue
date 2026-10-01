@@ -402,7 +402,8 @@ const { mutate: arrange, isPending } = useMutation({
     if (data.conflicts.length === 0 && data.droppedCount === 0) {
       toast.success("排歌成功！");
     } else {
-      toast.warning(`排歌完成：${data.placedCount} 首已安排，${data.droppedCount} 首被舍弃，${data.conflicts.length} 个期望日期冲突`);
+      const evicted = data.evictedCount > 0 ? `，回退 ${data.evictedCount} 首普通歌曲` : "";
+      toast.warning(`排歌完成：${data.placedCount} 首已安排，${data.droppedCount} 首被舍弃，${data.conflicts.length} 个期望日期冲突${evicted}`);
     }
   },
   onError: err => useErrorHandler(err),

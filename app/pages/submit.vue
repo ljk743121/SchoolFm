@@ -26,8 +26,8 @@
         <ul class="mt-2 list-disc space-y-1 pl-5">
           <li class="text-destructive">
             已阅读投稿规则和<NuxtLink to="/faq" class="text-blue-600 hover:underline">
-              常见问题
-            </NuxtLink>
+              <strong>常见问题</strong>
+            </NuxtLink>,其中包含了投稿流程和具体排歌逻辑。
           </li>
           <li>检查是否已有相同歌曲</li>
           <li>选择合适的音乐源</li>
@@ -333,7 +333,57 @@
               </FormItem>
             </FormField>
 
-            <Button type="submit" class="w-full" :disabled="isPending || submitDisabled || !selectedSong.songId">
+            <div v-if="form.values.expectedPlayDate" class="space-y-3">
+              <Button
+                v-if="canValidate"
+                type="button"
+                variant="secondary"
+                class="w-full"
+                :disabled="previewPending"
+                @click.prevent="onValidate"
+              >
+                <Icon v-if="previewPending" name="lucide:loader-circle" class="mr-2 animate-spin" />
+                <Icon v-else name="lucide:clipboard-check" class="mr-2" />
+                校验
+              </Button>
+
+              <Alert v-if="previewResult" :variant="previewResult.canSchedule ? 'default' : 'destructive'">
+                <AlertTitle class="flex items-center gap-2">
+                  <Icon :name="previewResult.canSchedule ? 'lucide:circle-check' : 'lucide:circle-alert'" class="size-4" />
+                  {{ previewResult.canSchedule ? "可安排在期望日期当天" : "可能无法安排在期望日期当天" }}
+                </AlertTitle>
+                <AlertDescription>
+                  <template v-if="previewResult.canSchedule">
+                    预计播放日期：{{ previewResult.scheduledDate }}，预计当天位置：第 {{ previewResult.position }} 位，预计播放时间：约 {{ previewResult.playTime }}（当天共 {{ previewResult.daySongCount }} 首）。
+                  </template>
+                  <!-- 项目未配置不可用日期，暂不需要该分支
+                  <template v-else-if="previewResult.reason === 'unavailable'">
+                    期望日期当天不可用，提交后可能无法安排在当天。
+                  </template>
+                  -->
+                  <template v-else>
+                    期望日期当天容量已满，提交后可能无法安排在当天。
+                  </template>
+                </AlertDescription>
+              </Alert>
+
+              <div class="flex items-start gap-x-3 rounded-md border p-3">
+                <Checkbox
+                  id="schedule-validated"
+                  :model-value="scheduleValidated"
+                  @update:model-value="handleValidatedChange"
+                />
+                <label for="schedule-validated" class="text-sm leading-none">
+                  我已校验歌曲是否能在期望日期播放
+                </label>
+              </div>
+            </div>
+
+            <Button
+              type="submit"
+              class="w-full"
+              :disabled="isPending || submitDisabled || !selectedSong.songId || (!!form.values.expectedPlayDate && !scheduleValidated)"
+            >
               <Icon v-if="isPending" name="lucide:loader-circle" class="mr-2 animate-spin" />
               提交投稿
             </Button>
@@ -518,6 +568,43 @@ function onSearch() {
     SearchKey.value = SearchInput.value.trim();
   }
 }
+
+const previewResult = ref<RouterOutput["song"]["previewSchedule"] | null>(null);
+const previewPending = ref(false);
+// 选择期望日期后需勾选确认，才允许提交
+const scheduleValidated = ref(false);
+
+const canValidate = computed(() => !!selectedSong.value.songId && !!form.values.expectedPlayDate);
+
+function handleValidatedChange(value: boolean | "indeterminate") {
+  scheduleValidated.value = value === true;
+}
+
+async function onValidate() {
+  if (!canValidate.value || previewPending.value)
+    return;
+  previewPending.value = true;
+  try {
+    previewResult.value = await $trpc.song.previewSchedule.query({
+      expectedPlayDate: form.values.expectedPlayDate!,
+      duration: selectedSong.value.duration,
+    });
+  } catch (err) {
+    previewResult.value = null;
+    useErrorHandler(err);
+  } finally {
+    previewPending.value = false;
+  }
+}
+
+// 选择歌曲或期望日期变化后，上次的校验结果与确认勾选失效
+watch(
+  () => [selectedSong.value.songId, selectedSong.value.duration, form.values.expectedPlayDate],
+  () => {
+    previewResult.value = null;
+    scheduleValidated.value = false;
+  },
+);
 
 // const searchExport = ref({
 //   songs: [] as RouterOutput['search']['mixSearch'],

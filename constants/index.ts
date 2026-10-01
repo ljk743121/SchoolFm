@@ -62,6 +62,8 @@ export const pwRegex = /.*(?=.*\d)(?=.*[A-Za-z]).*/;
 export const resetPassword = "Abc123456";
 export const defaultVipSign = "vip-song";
 export const MAX_DAILY_SONG_DURATION = 45 * 60;
+// 每天开始播放的时间（HH:mm），用于预估歌曲播放时间
+export const START_TIME = "18:30";
 export const SCHOOL_NAME = "实验之声广播站";
 
 export const searchBaseURL = {

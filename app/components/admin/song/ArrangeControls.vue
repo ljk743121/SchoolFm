@@ -64,20 +64,24 @@
     </Button>
 
     <Alert
-      v-if="arrangeResult && (arrangeResult.conflicts.length || arrangeResult.droppedCount)"
+      v-if="arrangeResult && (arrangeResult.conflicts.length || arrangeResult.droppedCount || arrangeResult.evictedCount)"
       variant="destructive"
     >
       <AlertTitle>排歌冲突提示</AlertTitle>
       <AlertDescription>
-        <p class="mb-2">
-          已安排 {{ arrangeResult.placedCount }} 首，舍弃 {{ arrangeResult.droppedCount }} 首，发现 {{ arrangeResult.conflicts.length }} 个期望日期冲突。
-        </p>
-        <ul v-if="arrangeResult.conflicts.length" class="list-disc space-y-1 pl-5">
-          <li v-for="conflict in arrangeResult.conflicts" :key="conflict.songId">
-            歌曲 #{{ conflict.songId }} 期望日期 {{ conflict.expectedDate }} {{ conflict.reason === 'unavailable' ? '不可用' : '已满' }}
-            <span v-if="conflict.suggestedDate">，已建议调整至 {{ conflict.suggestedDate }}</span>
-          </li>
-        </ul>
+        <ScrollArea class="h-[200px] w-full max-w-full rounded-md border px-3 py-2">
+          <p class="mb-2">
+            已安排 {{ arrangeResult.placedCount }} 首，舍弃 {{ arrangeResult.droppedCount }} 首，发现 {{ arrangeResult.conflicts.length }} 个期望日期冲突<template v-if="arrangeResult.evictedCount">
+              ，为安排期望日/欠播歌曲回退了 {{ arrangeResult.evictedCount }} 首普通歌曲
+            </template>。
+          </p>
+          <ul v-if="arrangeResult.conflicts.length" class="list-disc space-y-1 pl-5">
+            <li v-for="conflict in arrangeResult.conflicts" :key="conflict.songId">
+              歌曲 #{{ conflict.songId }} 期望日期 {{ conflict.expectedDate }} {{ conflict.reason === 'unavailable' ? '不可用' : '已满' }}
+              <span v-if="conflict.suggestedDate">，已建议调整至 {{ conflict.suggestedDate }}</span>
+            </li>
+          </ul>
+        </ScrollArea>
       </AlertDescription>
     </Alert>
   </div>

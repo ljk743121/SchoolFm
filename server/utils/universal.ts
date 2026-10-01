@@ -31,7 +31,8 @@ export async function getAllConfigs() {
   const cached = await cacheGet(CONFIG_CACHE_KEY);
 
   if (cached) {
-    return JSON.parse(cached);
+    const configMap = JSON.parse(cached) as Record<string, string>;
+    return Object.entries(configMap).map(([key, value]) => ({ key, value }));
   }
 
   const values = await db.query.configs.findMany();
