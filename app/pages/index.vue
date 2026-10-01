@@ -161,12 +161,8 @@
             </TabsTrigger>
             <TabsTrigger
               value="notification"
-              :disabled="!userStore.loggedIn"
               :class="{ 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200': hasNewAnnouncement }"
-              @click="() => {
-                hasNewAnnouncement = false;
-                updateLoginTime();
-              }"
+              @click="handleNotificationTab"
             >
               通知
             </TabsTrigger>
@@ -263,15 +259,10 @@
           </ul>
         </TabsContent>
         <TabsContent value="notification" class="flex-1">
-          <div v-if="isAnnouncementListPending">
+          <div v-if="isNotificationPending">
             <Icon name="lucide:loader-2" size="20" class="animate-spin" />
           </div>
-          <LazyHomeAnnouncement
-            v-else
-            :announcement-list="userStore.announcementCache && userStore.announcementCache.length > 0
-              ? userStore.announcementCache
-              : announcementList!"
-          />
+          <LazyHomeAnnouncement v-else :announcement-list="notificationList" />
         </TabsContent>
       </Tabs>
     </section>
@@ -439,6 +430,33 @@ const { data: announcementHash, suspense: announcementHashSuspense } = useQuery(
   refetchOnWindowFocus: false,
   enabled: userStore.loggedIn,
 });
+
+const { data: publicAnnouncement, isPending: isPublicAnnouncementPending } = useQuery({
+  queryFn: () => $trpc.announcement.latestPublic.query(),
+  queryKey: ["announcement.latestPublic"],
+  refetchIntervalInBackground: false,
+  refetchOnWindowFocus: false,
+  enabled: !userStore.loggedIn,
+});
+
+const notificationList = computed<RouterOutput["announcement"]["listSafe"]>(() => {
+  if (userStore.loggedIn) {
+    return userStore.announcementCache && userStore.announcementCache.length > 0
+      ? userStore.announcementCache
+      : announcementList.value ?? [];
+  }
+  return publicAnnouncement.value ? [publicAnnouncement.value] : [];
+});
+
+const isNotificationPending = computed(() =>
+  userStore.loggedIn ? isAnnouncementListPending.value : isPublicAnnouncementPending.value,
+);
+
+function handleNotificationTab() {
+  hasNewAnnouncement.value = false;
+  if (userStore.loggedIn)
+    updateLoginTime();
+}
 
 function getDateString(date: Date) {
   return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, "0")}-${date.getDate().toString().padStart(2, "0")}`;

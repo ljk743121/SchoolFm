@@ -5,10 +5,11 @@ import { z } from "zod";
 import { db } from "~~/server/db";
 import { announcement } from "~~/server/db/schema";
 import { cacheDel, cacheGet, cacheSet } from "~~/server/utils/redis";
-import { adminProcedure, protectedProcedure, requirePermission, router } from "../trpc";
+import { adminProcedure, protectedProcedure, publicProcedure, requirePermission, router } from "../trpc";
 
 const cacheKey = "announcement:listSafe";
 const cacheKeyAdmin = "announcement:listAdmin";
+const cacheKeyLatestPublic = "announcement:latestPublic";
 
 export const announcementRouter = router({
   create: adminProcedure
@@ -55,6 +56,23 @@ export const announcementRouter = router({
     });
     await cacheSet(cacheKey, JSON.stringify(list), { EX: 604800 });
     return list;
+  }),
+
+  latestPublic: publicProcedure.query(async () => {
+    const cachedLatest = await cacheGet(cacheKeyLatestPublic);
+    if (cachedLatest) {
+      return JSON.parse(cachedLatest);
+    }
+    const latest = await db.query.announcement.findFirst({
+      where: eq(announcement.visible, "public"),
+      orderBy: desc(announcement.createdAt),
+      columns: {
+        createdAt: true,
+        markdown: true,
+      },
+    });
+    await cacheSet(cacheKeyLatestPublic, JSON.stringify(latest ?? null), { EX: 604800 });
+    return latest ?? null;
   }),
 
   listAdmin: adminProcedure.query(async () => {
@@ -111,6 +129,7 @@ export const announcementRouter = router({
         .where(eq(announcement.id, input.id));
       await cacheDel(cacheKey);
       await cacheDel(cacheKeyAdmin);
+      await cacheDel(cacheKeyLatestPublic);
     }),
 
   getHash: protectedProcedure.query(async () => {

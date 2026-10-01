@@ -15,6 +15,7 @@
             使用<span class="mx-1 font-mono font-light tracking-tighter text-blue-700">SchoolFm</span>账号登录
           </p>
         </div>
+        <AuthAnnouncement />
         <div class="grid gap-4">
           <form @submit.prevent="onSubmit">
             <FormField v-slot="{ componentField }" name="id">
