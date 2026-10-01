@@ -57,6 +57,17 @@
 
         <section>
           <p>
+            <NuxtLink
+              to="mailto:ljk743121@outlook.com"
+              class="underline underline-offset-4"
+            >
+              <span>联系作者</span>
+            </NuxtLink>
+          </p>
+        </section>
+
+        <section>
+          <p>
             项目贡献者：
           </p>
           <NuxtLink

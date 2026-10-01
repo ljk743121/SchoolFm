@@ -15,7 +15,12 @@
             <DialogTitle>投稿规则</DialogTitle>
           </div>
           <DialogDescription>
-            投稿前请仔细阅读，确保你的歌曲符合校园广播播放要求。
+            投稿前请仔细阅读，确保你的歌曲要求。
+            <br>
+            请先阅读<NuxtLink to="/faq" class="font-medium text-primary underline underline-offset-2">
+              <strong>常见问题</strong>
+            </NuxtLink>
+            再阅读该规则。
           </DialogDescription>
         </DialogHeader>
 
