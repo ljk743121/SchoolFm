@@ -252,6 +252,7 @@
               <SongCard
                 :song
                 is-arrangement
+                :play-time="arrangementPlayTimes.get(song.id)"
                 :is-playing="isTrackPlaying(song.id)"
                 @song-export="playMusic"
               />
@@ -289,7 +290,7 @@ import type { RouterOutput } from "~~/types";
 import type { TPlayerTrack } from "~/composables/useMusicPlayer";
 import { useFuse, type UseFuseOptions } from "@vueuse/integrations/useFuse";
 import { DatePicker } from "@ztl-uwu/v-calendar";
-import { getImgUrl, SCHOOL_NAME } from "~~/constants";
+import { getImgUrl, SCHOOL_NAME, START_TIME } from "~~/constants";
 // import { fetchMusicUrl } from "~~/deprecate/shared/plugin";
 
 useSeoMeta({
@@ -470,6 +471,24 @@ const currentArrangement = computed(() => {
 const arrangementListSongs = computed(() => {
   return currentArrangement.value?.songs || [];
 });
+
+/** 每首歌的预计播放时间（HH:mm），从每天开始播放时间起按顺序累加前面歌曲时长 */
+const arrangementPlayTimes = computed(() => {
+  const result = new Map<number, string>();
+  const [startHour, startMinute] = START_TIME.split(":").map(Number);
+  let seconds = (startHour ?? 0) * 3600 + (startMinute ?? 0) * 60;
+  for (const song of arrangementListSongs.value) {
+    result.set(song.id, formatPlayTime(seconds));
+    seconds += song.duration ?? 0;
+  }
+  return result;
+});
+
+function formatPlayTime(seconds: number) {
+  const hh = String(Math.floor(seconds / 3600) % 24).padStart(2, "0");
+  const mm = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
 
 const arrangementUnplayedCount = computed(() => {
   return (currentArrangement.value?.songs || []).filter(

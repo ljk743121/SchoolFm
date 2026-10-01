@@ -2,7 +2,7 @@ import type { TMediaSource, TSubmitType } from "~~/types";
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gt, inArray, or } from "drizzle-orm";
 import { z } from "zod";
-import { MAX_DAILY_SONG_DURATION } from "~~/constants";
+import { MAX_DAILY_SONG_DURATION, START_TIME } from "~~/constants";
 import { db } from "~~/server/db";
 import { arrangements, songs, users } from "~~/server/db/schema";
 import { cacheDel, cacheGet, cacheSet } from "~~/server/utils/redis";
@@ -377,6 +377,133 @@ export const songRouter = router({
   canSubmit: protectedProcedure.query(async ({ ctx }) => {
     return await checkCanSubmit(ctx.user.remainSubmitSongs);
   }),
+
+  // 预估本次投稿能否安排在期望日期当天，并给出预计位置（不写库）
+  previewSchedule: protectedProcedure
+    .input(
+      z.object({
+        expectedPlayDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "日期格式必须为 YYYY-MM-DD"),
+        duration: z.number().positive(),
+      }),
+    )
+    .query(async ({ input }) => {
+      const date = input.expectedPlayDate;
+
+      // 项目未配置不可用日期，以下逻辑暂时停用
+      /*
+      // 不可用日期直接判定无法安排在当天
+      const unavailableConfig = await getConfig("unavailableDates");
+      let unavailableDates: string[] = [];
+      if (unavailableConfig) {
+        try {
+          const parsed = JSON.parse(unavailableConfig);
+          if (Array.isArray(parsed))
+            unavailableDates = parsed.map(String);
+        } catch {
+          // 忽略配置解析错误
+        }
+      }
+      if (unavailableDates.includes(date)) {
+        return {
+          canSchedule: false,
+          reason: "unavailable" as const,
+          scheduledDate: null,
+          position: null,
+          daySongCount: 0,
+          dayDuration: 0,
+          remainingSeconds: 0,
+          playTime: null,
+        };
+      }
+      */
+
+      // 当天已排歌曲
+      const arrangement = await db.query.arrangements.findFirst({
+        where: eq(arrangements.date, date),
+        with: {
+          songs: {
+            columns: { id: true, duration: true, expectedPlayDate: true, createdAt: true },
+          },
+        },
+      });
+      const occupied = new Map<number, { id: number; duration: number; expectedPlayDate: string | null; createdAt: Date }>();
+      for (const s of arrangement?.songs ?? []) {
+        occupied.set(s.id, {
+          id: s.id,
+          duration: s.duration ?? 0,
+          expectedPlayDate: s.expectedPlayDate,
+          createdAt: s.createdAt,
+        });
+      }
+
+      // 同日期但尚未排期的歌曲：审核通过后也会落到同一天，需计入竞争
+      const competing = await db.query.songs.findMany({
+        where: and(
+          inArray(songs.state, ["approved", "missed", "failed"]),
+          eq(songs.expectedPlayDate, date),
+        ),
+        columns: { id: true, duration: true, expectedPlayDate: true, createdAt: true },
+      });
+      for (const s of competing) {
+        if (!occupied.has(s.id)) {
+          occupied.set(s.id, {
+            id: s.id,
+            duration: s.duration ?? 0,
+            expectedPlayDate: s.expectedPlayDate,
+            createdAt: s.createdAt,
+          });
+        }
+      }
+
+      const currentDuration = [...occupied.values()].reduce((sum, s) => sum + s.duration, 0);
+      const totalDuration = currentDuration + input.duration;
+      const daySongCount = occupied.size + 1;
+
+      // 预计位置：期望日为当天的歌曲排前面（组内按投稿时间升序），其余随后
+      const list = [
+        ...occupied.values(),
+        { id: -1, duration: input.duration, expectedPlayDate: date, createdAt: new Date() },
+      ].sort((a, b) => {
+        const cmp = Number(b.expectedPlayDate === date) - Number(a.expectedPlayDate === date);
+        if (cmp !== 0)
+          return cmp;
+        return a.createdAt.getTime() - b.createdAt.getTime();
+      });
+      const position = list.findIndex(s => s.id === -1) + 1;
+
+      // 预计播放时间：从每天开始播放时间起，累加前面所有歌曲的时长
+      const precedingDuration = list
+        .slice(0, position - 1)
+        .reduce((sum, s) => sum + s.duration, 0);
+      const [startHour, startMinute] = START_TIME.split(":").map(Number);
+      const startSeconds = (startHour ?? 0) * 3600 + (startMinute ?? 0) * 60;
+      const playSeconds = startSeconds + precedingDuration;
+      const playTime = `${String(Math.floor(playSeconds / 3600) % 24).padStart(2, "0")}:${String(Math.floor((playSeconds % 3600) / 60)).padStart(2, "0")}`;
+
+      if (totalDuration > MAX_DAILY_SONG_DURATION) {
+        return {
+          canSchedule: false,
+          reason: "full" as const,
+          scheduledDate: null,
+          position: null,
+          daySongCount,
+          dayDuration: totalDuration,
+          remainingSeconds: Math.max(0, MAX_DAILY_SONG_DURATION - currentDuration),
+          playTime: null,
+        };
+      }
+
+      return {
+        canSchedule: true,
+        reason: null,
+        scheduledDate: date,
+        position,
+        daySongCount,
+        dayDuration: totalDuration,
+        remainingSeconds: MAX_DAILY_SONG_DURATION - totalDuration,
+        playTime,
+      };
+    }),
 
   remainSubmitSongs: protectedProcedure.query(async ({ ctx }) => {
     if (ctx.user.remainSubmitSongs === ctx.user.maxSubmitSongs) {

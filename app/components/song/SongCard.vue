@@ -38,6 +38,10 @@
             <Badge variant="secondary" class="text-xs">
               {{ realNameLabel }}
             </Badge>
+            <Badge v-if="playTime" variant="outline" class="text-xs">
+              <Icon name="lucide:clock" class="mr-1 size-3" />
+              预计 {{ playTime }} 播放
+            </Badge>
             <Badge
               v-if="isMine && song.arrangementDate && song.arrangementDate !== song.expectedPlayDate"
               variant="secondary"
@@ -353,6 +357,7 @@ const {
   isArrangement = false,
   isMine = false,
   isPlaying = false,
+  playTime,
 } = defineProps<{
   type?: "public" | "review" | "songs";
   selected?: boolean;
@@ -360,6 +365,8 @@ const {
   isArrangement?: boolean;
   isMine?: boolean;
   isPlaying?: boolean;
+  /** 预计播放时间（HH:mm），仅排歌列表传入 */
+  playTime?: string;
 }>();
 
 const emit = defineEmits<{
