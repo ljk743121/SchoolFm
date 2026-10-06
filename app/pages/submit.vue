@@ -39,6 +39,23 @@
       </AlertDescription>
     </Alert>
 
+    <Alert class="mb-6">
+      <AlertTitle class="flex items-center gap-2">
+        <Icon name="lucide:info" class="size-4" />
+        投稿Tips
+      </AlertTitle>
+      <AlertDescription>
+        <ul class="mt-2 list-disc space-y-1 pl-5">
+          <li><strong>想尽快播：</strong>期望日填未满未锁定的日期，尽量早点投稿（特别是长歌曲），排序权重投稿时间很重要。</li>
+          <li><strong>别都挤同一天：</strong>期望日尽量错开，避开已满的日期。</li>
+          <li><strong>填未来期望日就按未来处理：</strong>系统只会在该日及之后考虑，若不能排歌不会提前安排</li>
+          <li><strong>不填期望日会不确定：</strong>自由歌最后按剩余容量排，通常更晚，但短歌可能会提前播放。</li>
+          <li><strong>落选不等于删除：</strong>一般会回到待排池，可以调整期望日或等下一次排歌。</li>
+        </ul>
+        详细内容请查看常见问题
+      </AlertDescription>
+    </Alert>
+
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <!-- Search Panel -->
       <Card class="flex flex-col">

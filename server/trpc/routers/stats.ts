@@ -6,6 +6,18 @@ import { songs, users } from "~~/server/db/schema";
 import { cacheGet, cacheSet } from "~~/server/utils/redis";
 import { adminProcedure, protectedProcedure, router } from "../trpc";
 
+/** 各状态计数初始值；键必须覆盖 TSongState 全部取值 */
+const EMPTY_STATE_COUNT: { [key in TSongState]: number } = {
+  pending: 0,
+  approved: 0,
+  rejected: 0,
+  used: 0,
+  played: 0,
+  dropped: 0,
+  missed: 0,
+  failed: 0,
+};
+
 async function getSongMap() {
   const cacheKey = "songMap";
   const cached = await cacheGet(cacheKey);
@@ -28,14 +40,7 @@ async function getSongMap() {
   const map = new Map<string, { [key in TSongState]: number }>();
   for (const song of songs) {
     const date = song.createdAt.toLocaleDateString("zh-CN");
-    const val = map.get(date) ?? {
-      approved: 0,
-      dropped: 0,
-      missed: 0,
-      pending: 0,
-      rejected: 0,
-      used: 0,
-    };
+    const val = map.get(date) ?? { ...EMPTY_STATE_COUNT };
     val[song.state]++;
     map.set(date, val);
   }

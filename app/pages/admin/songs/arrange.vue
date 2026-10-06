@@ -399,11 +399,19 @@ const { mutate: arrange, isPending } = useMutation({
     queryClient.invalidateQueries({ queryKey: ["arrangements.stats"] });
     arrangeResult.value = data;
     selectedDayIndex.value = 0;
-    if (data.conflicts.length === 0 && data.droppedCount === 0) {
-      toast.success("排歌成功！");
+    if (data.droppedCount === 0 && data.adjustedCount === 0) {
+      toast.success(`排歌成功：${data.placedCount} 首已安排`);
     } else {
-      const evicted = data.evictedCount > 0 ? `，回退 ${data.evictedCount} 首普通歌曲` : "";
-      toast.warning(`排歌完成：${data.placedCount} 首已安排，${data.droppedCount} 首被舍弃，${data.conflicts.length} 个期望日期冲突${evicted}`);
+      const parts = [
+        `${data.placedCount} 首已安排`,
+        `${data.adjustedCount} 首调期`,
+        `${data.droppedCount} 首落选`,
+      ];
+      if (data.evictedCount > 0)
+        parts.push(`${data.evictedCount} 首被挤出原排期`);
+      if (data.frozenDays.length > 0)
+        parts.push(`${data.frozenDays.length} 天已锁定排期未改动`);
+      toast.warning(`排歌完成：${parts.join("，")}`);
     }
   },
   onError: err => useErrorHandler(err),

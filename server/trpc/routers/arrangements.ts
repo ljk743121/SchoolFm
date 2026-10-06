@@ -1,14 +1,12 @@
-import type { ArrangeSong } from "~~/server/utils/arrange";
 import { parseDate } from "@internationalized/date";
 import { TRPCError } from "@trpc/server";
 import { consola } from "consola";
-// eslint-disable-next-line unused-imports/no-unused-imports
-import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { z } from "zod";
 import { MAX_DAILY_SONG_DURATION } from "~~/constants";
 import { db } from "~~/server/db";
 import { arrangements, songs, users } from "~~/server/db/schema";
-import { scheduleSongs } from "~~/server/utils/arrange";
+import { assembleArrange } from "~~/server/utils/arrange";
 import { cacheDel, cacheGet, cacheSet } from "~~/server/utils/redis";
 import { getArrangementVolatileMap, getVolatileSongMap } from "~~/server/utils/songCache";
 import { getConfig } from "~~/server/utils/universal";
@@ -366,201 +364,137 @@ export const arrangementsRouter = router({
         });
       }
 
-      const dateColumns = {
-        id: true,
-        duration: true,
-        expectedPlayDate: true,
-        createdAt: true,
-        state: true,
-      } as const;
-
-      const approvedSongs = await db.query.songs.findMany({
-        where: eq(songs.state, "approved"),
-        orderBy: [desc(songs.likeCount), asc(songs.createdAt)],
-        columns: dateColumns,
-      });
-      const missedSongs = await db.query.songs.findMany({
-        where: eq(songs.state, "missed"),
-        orderBy: [desc(songs.likeCount), asc(songs.createdAt)],
-        columns: dateColumns,
-      });
-      const failedSongs = await db.query.songs.findMany({
-        where: eq(songs.state, "failed"),
-        orderBy: [desc(songs.likeCount), asc(songs.createdAt)],
-        columns: dateColumns,
+      const {
+        plan,
+        candidateRows,
+        originalById,
+        fixedByDay,
+        fillableDates,
+        frozenDates,
+        rangeDates,
+      } = await assembleArrange({
+        start: input.start,
+        end: input.end,
+        songCount: input.songCount,
       });
 
-      // 带期望日期的 dropped 歌曲属于“欠播”，需始终参与排歌以便顺延补播，不受容量启发式限制
-      const droppedExpectedSongs = await db.query.songs.findMany({
-        where: and(eq(songs.state, "dropped"), isNotNull(songs.expectedPlayDate)),
-        orderBy: [desc(songs.likeCount), asc(songs.createdAt)],
-        columns: dateColumns,
-      });
-
-      let droppedSongs: typeof approvedSongs = droppedExpectedSongs;
-      const availableSongs = [...approvedSongs, ...missedSongs, ...failedSongs];
-      if (
-        (end.compare(start) + 1) * (input.songCount || 1) > availableSongs.length
-        || input.songCount === 0
-      ) {
-        const droppedWithoutExpected = await db.query.songs.findMany({
-          where: and(eq(songs.state, "dropped"), isNull(songs.expectedPlayDate)),
-          orderBy: [desc(songs.likeCount), asc(songs.createdAt)],
-          columns: dateColumns,
+      if (fillableDates.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "区间内没有可排歌的日期（日期已早于今天、当天已播放或排期已锁定）",
         });
-        droppedSongs = [...droppedExpectedSongs, ...droppedWithoutExpected];
       }
-
-      const candidateSongs: ArrangeSong[] = [...availableSongs, ...droppedSongs].map(s => ({
-        id: s.id,
-        duration: s.duration ?? 0,
-        expectedPlayDate: s.expectedPlayDate,
-        createdAt: s.createdAt,
-        priority: s.state === "missed" ? 0 : s.state === "approved" ? 1 : s.state === "dropped" ? 2 : 3,
-      }));
-      if (candidateSongs.length === 0) {
+      // 没有候选歌曲时直接返回，避免把区间内的排期整片清空
+      if (candidateRows.length === 0) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "没有歌曲可播放",
         });
       }
 
-      const rangeDates: string[] = [];
-      for (let date = start; date.compare(end) <= 0; date = date.add({ days: 1 })) {
-        rangeDates.push(date.toString());
+      const placedDate = new Map<number, string>();
+      for (const [date, ids] of Object.entries(plan.assignments)) {
+        for (const id of ids)
+          placedDate.set(id, date);
       }
-
-      const existingArrangements = await db.query.arrangements.findMany({
-        where: and(gte(arrangements.date, input.start), lte(arrangements.date, input.end)),
-        columns: {
-          date: true,
-          status: true,
-        },
-        with: {
-          songs: {
-            orderBy: order,
-            columns: {
-              id: true,
-              duration: true,
-              expectedPlayDate: true,
-              state: true,
-              createdAt: true,
-            },
-          },
-        },
-      });
-
-      // 已锁定（status ≠ pending）的日期不可再改动，直接跳过当天排歌：
-      // 不排入新歌、不重排顺序、也不把该日歌曲计入已有排期。
-      // 该日状态为 missed / failed 的歌曲仍会作为候选参与其他日期的排歌；
-      // played / used 歌曲不在候选查询范围内，自然不参与。
-      const lockedDates = new Set<string>(
-        existingArrangements
-          .filter(a => a.status !== "pending" && rangeDates.includes(a.date))
-          .map(a => a.date),
-      );
-
-      const existingAssignments: Record<string, number[]> = {};
-      const existingSongs: ArrangeSong[] = [];
-      const existingSongIds = new Set<number>();
-      for (const arrangement of existingArrangements) {
-        if (!rangeDates.includes(arrangement.date) || lockedDates.has(arrangement.date))
-          continue;
-        existingAssignments[arrangement.date] = arrangement.songs.map((s) => {
-          if (!existingSongIds.has(s.id)) {
-            existingSongIds.add(s.id);
-            existingSongs.push({
-              id: s.id,
-              duration: s.duration ?? 0,
-              expectedPlayDate: s.expectedPlayDate,
-              createdAt: s.createdAt,
-              // used / played 视作已通过的普通歌曲，参与按优先级的重新排序
-              priority: s.state === "missed" ? 0 : s.state === "dropped" ? 2 : s.state === "failed" ? 3 : 1,
-            });
-          }
-          return s.id;
-        });
-      }
-
-      // 锁定日期视为不可用日期：不排入新歌，就近回退时也会跳过
-      const unavailableDates = [...lockedDates];
-
-      const result = scheduleSongs(candidateSongs, input.start, input.end, {
-        maxDailyDuration: MAX_DAILY_SONG_DURATION,
-        maxSongsPerDay: input.songCount > 0 ? input.songCount : undefined,
-        unavailableDates,
-        existingAssignments,
-        existingSongs,
-      });
 
       await db.transaction(async (tx) => {
-        // 被抢占的普通歌曲回到待排池，可参与后续排期
-        if (result.evicted.length > 0) {
-          await tx
-            .update(songs)
-            .set({ state: "approved", arrangementDate: null, position: null })
-            .where(inArray(songs.id, result.evicted));
-        }
+        for (const date of fillableDates) {
+          const ids = plan.assignments[date] ?? [];
+          if (ids.length === 0)
+            continue;
 
-        for (const [dateString, songIds] of Object.entries(result.assignments)) {
-          const existingIds = new Set(existingAssignments[dateString] ?? []);
-          const newSongIds = songIds.filter(id => !existingIds.has(id));
-          if (newSongIds.length > 0) {
-            const arrangement = await tx.query.arrangements.findFirst({
-              where: eq(arrangements.date, dateString),
-            });
-            if (!arrangement) {
-              await tx.insert(arrangements).values({ date: dateString });
-            }
-          }
+          const arrangementRow = await tx.query.arrangements.findFirst({
+            where: eq(arrangements.date, date),
+            columns: { date: true },
+          });
+          if (!arrangementRow)
+            await tx.insert(arrangements).values({ date });
 
-          // 按排歌优先级重新分配当天的播放顺序：已有排期歌曲与新排歌曲统一重排 position
-          for (let i = 0; i < songIds.length; i++) {
-            const songId = songIds[i]!;
+          // 播放顺序：跳过当天固定占用（played 等）已占用的编号，避免同一天出现重复 position
+          const usedSlots = new Set(
+            (fixedByDay.get(date) ?? [])
+              .map(fixed => originalById.get(fixed.id)?.position)
+              .filter((position): position is number => typeof position === "number"),
+          );
+          let next = 1;
+          for (const id of ids) {
+            while (usedSlots.has(next))
+              next += 1;
+            const position = next;
+            usedSlots.add(position);
+            next += 1;
+
+            const original = originalById.get(id);
+            if (!original)
+              throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `排歌结果包含未知歌曲 #${id}` });
+            // 排入即待播：统一记为 used，歌曲随之离开待排池
+            const state = "used";
+            if (original.arrangementDate === date && original.position === position && original.state === state)
+              continue;
+
             await tx
               .update(songs)
-              .set({
-                arrangementDate: dateString,
-                position: i + 1,
-                ...(existingIds.has(songId) ? {} : { state: "used" as const }),
-              })
-              .where(eq(songs.id, songId));
+              .set({ arrangementDate: date, position, state })
+              .where(eq(songs.id, id));
           }
         }
 
-        const droppedSongRows = result.dropped.length
-          ? await db.query.songs.findMany({
-            where: inArray(songs.id, result.dropped),
-            columns: { id: true, state: true },
-          })
-          : [];
-        // missed / failed 状态的歌曲未排上时保持原状态，不降级为 dropped
-        const songsToDrop = droppedSongRows
-          .filter(s => s.state !== "missed" && s.state !== "failed")
-          .map(s => s.id);
-        if (songsToDrop.length > 0) {
+        // 未排上（落选 / 被挤出）：退回待排池。
+        // 原本是待排池状态（missed/failed/approved/dropped）的保持不变，欠播优先级不丢；
+        // 原本已排期（used）的退回 approved，避免出现「used 却没有排期」的悬空状态。
+        for (const id of plan.dropped) {
+          const original = originalById.get(id);
+          if (!original)
+            continue;
+          const state = original.state === "used" ? "approved" : original.state;
+          const clearDate = original.arrangementDate !== null;
+          const changeState = original.state !== state;
+          if (!clearDate && !changeState)
+            continue;
           await tx
             .update(songs)
-            .set({ state: "dropped", arrangementDate: null, position: null })
-            .where(inArray(songs.id, songsToDrop));
+            .set({
+              ...(clearDate ? { arrangementDate: null, position: null } : {}),
+              ...(changeState ? { state } : {}),
+            })
+            .where(eq(songs.id, id));
+        }
+
+        // 区间内最终没有成员、也没有任何歌曲引用的日期：删除残留的排期行。
+        // 区间外的日期一律不动。
+        for (const date of rangeDates) {
+          if ((plan.assignments[date]?.length ?? 0) > 0)
+            continue;
+          const referenced = await tx.query.songs.findFirst({
+            where: eq(songs.arrangementDate, date),
+            columns: { id: true },
+          });
+          if (referenced)
+            continue;
+          await tx.delete(arrangements).where(eq(arrangements.date, date));
         }
       });
 
-      const placedCount = Object.entries(result.assignments).reduce(
-        (sum, [dateString, songIds]) => {
-          const existingIds = new Set(existingAssignments[dateString] ?? []);
-          return sum + songIds.filter(id => !existingIds.has(id)).length;
-        },
-        0,
-      );
-
       await invalidateArrangementCache();
+      await cacheDel("songMap");
+
+      const placedCount = [...placedDate.keys()]
+        .filter(id => !originalById.get(id)?.arrangementDate)
+        .length;
 
       return {
-        conflicts: result.conflicts,
-        droppedCount: result.dropped.length,
         placedCount,
-        evictedCount: result.evicted.length,
+        droppedCount: plan.dropped.length,
+        evictedCount: plan.evicted.length,
+        adjustedCount: plan.adjustments.length,
+        frozenDays: frozenDates,
+        conflicts: plan.adjustments.map(adjustment => ({
+          songId: adjustment.songId,
+          expectedDate: adjustment.expectedDate,
+          actualDate: adjustment.actualDate,
+          reason: adjustment.reason,
+        })),
       };
     }),
 
