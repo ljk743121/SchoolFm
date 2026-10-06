@@ -1,3 +1,4 @@
+import type { ArrangeSongState } from "~~/server/utils/arrange";
 import type { TMediaSource, TSubmitType } from "~~/types";
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gt, inArray, or } from "drizzle-orm";
@@ -37,6 +38,7 @@ async function checkCanSubmit(remainSongs: number) {
 }
 
 // 将歌曲按期望播放日期自动安排进度表；无法安排（超时/空间不足）时保持 approved 状态
+// 复用排歌核心算法（server/utils/arrange），保证与自动排歌同一套优先级与容量规则
 async function arrangeSongOnDate(song: {
   id: number;
   duration: number | null;
@@ -46,90 +48,102 @@ async function arrangeSongOnDate(song: {
   const date = song.expectedPlayDate;
   if (!date)
     return;
-  const existingArrangement = await db.query.arrangements.findFirst({
-    where: eq(arrangements.date, date),
-    with: {
-      songs: {
-        columns: {
-          id: true,
-          duration: true,
-          position: true,
-          createdAt: true,
-          expectedPlayDate: true,
-        },
-      },
+
+  const existingRows = await db.query.songs.findMany({
+    where: eq(songs.arrangementDate, date),
+    columns: {
+      id: true,
+      duration: true,
+      expectedPlayDate: true,
+      createdAt: true,
+      state: true,
+      position: true,
     },
   });
 
-  const existingSongs = existingArrangement?.songs ?? [];
-  const currentSong = {
-    id: song.id,
-    duration: song.duration ?? 0,
-    position: -1,
-    createdAt: song.createdAt,
-    expectedPlayDate: date,
-  };
-  const slotSongs = [...existingSongs, currentSong].sort(
-    (a, b) => {
-      // if expectedPlayDate===date, put it last, otherwise put it first
-      // if both expectedPlayDate!==date, keep the order
-      const cmp = Number(a.expectedPlayDate === date) - Number(b.expectedPlayDate === date);
-      if (cmp !== 0)
-        return cmp;
-      return a.createdAt.getTime() - b.createdAt.getTime();
-    },
-  );
+  const { isMoveableState, localToday, planArrangement } = await import("~~/server/utils/arrange");
 
-  const removedIds: number[] = [];
-  while (slotSongs.reduce((sum, s) => sum + (s.duration ?? 0), 0) > MAX_DAILY_SONG_DURATION) {
-    const last = slotSongs.pop();
-    if (!last)
-      break;
-    if (!last?.expectedPlayDate) {
-      slotSongs.push(last);
-      break;
-    }
-    if (last.id === song.id) {
-      // 当前歌曲提交时间最晚，无法安排，保持 approved 状态
-      await db.transaction(async (tx) => {
-        for (const removedId of removedIds) {
-          await tx
-            .update(songs)
-            .set({ state: "approved", arrangementDate: null, position: null })
-            .where(eq(songs.id, removedId));
-        }
+  // 已播放（played）等不可移动的歌曲只占容量，不参与竞争
+  const moveableRows = existingRows.filter(
+    (row): row is typeof row & { state: ArrangeSongState } => isMoveableState(row.state),
+  );
+  const fixedRows = existingRows.filter(row => !isMoveableState(row.state));
+  const plan = planArrangement({
+    start: date,
+    end: date,
+    today: localToday(),
+    maxDailyDuration: MAX_DAILY_SONG_DURATION,
+    days: [{
+      date,
+      fixed: fixedRows.map(row => ({ id: row.id, duration: row.duration ?? 0 })),
+    }],
+    songs: [
+      ...moveableRows.map(row => ({
+        id: row.id,
+        duration: row.duration ?? 0,
+        expectedPlayDate: row.expectedPlayDate,
+        createdAt: row.createdAt,
+        state: row.state,
+        currentDate: date,
+      })),
+      {
+        id: song.id,
+        duration: song.duration ?? 0,
+        expectedPlayDate: date,
+        createdAt: song.createdAt,
+        state: "approved" as const,
+        currentDate: null,
+      },
+    ],
+  });
+
+  const assigned = plan.assignments[date] ?? [];
+
+  await db.transaction(async (tx) => {
+    if (assigned.length > 0) {
+      const arrangementRow = await tx.query.arrangements.findFirst({
+        where: eq(arrangements.date, date),
+        columns: { date: true },
+      });
+      if (!arrangementRow)
+        await tx.insert(arrangements).values({ date });
+
+      // 播放顺序：跳过不可移动歌曲已占用的编号
+      const usedSlots = new Set(
+        fixedRows
+          .map(row => row.position)
+          .filter((position): position is number => typeof position === "number"),
+      );
+      let next = 1;
+      for (const id of assigned) {
+        while (usedSlots.has(next))
+          next += 1;
+        const position = next;
+        usedSlots.add(position);
+        next += 1;
         await tx
           .update(songs)
-          .set({ state: "approved", arrangementDate: null, position: null })
-          .where(eq(songs.id, song.id));
-      });
-      await invalidateArrangementCache();
-      return;
-    }
-    removedIds.push(last.id);
-  }
-  slotSongs.sort((a, b) => {
-    // let songs with expectedPlayDate===date first
-    const cmp = Number(b.expectedPlayDate === date) - Number(a.expectedPlayDate === date);
-    if (cmp !== 0)
-      return cmp;
-    return a.createdAt.getTime() - b.createdAt.getTime();
-  });
-  await db.transaction(async (tx) => {
-    if (!existingArrangement) {
-      await tx.insert(arrangements).values({ date });
-    }
-    for (let i = 0; i < slotSongs.length; i++) {
-      await tx
-        .update(songs)
-        .set({ state: "used", arrangementDate: date, position: i + 1 })
-        .where(eq(songs.id, slotSongs[i]!.id));
-    }
-    for (const removedId of removedIds) {
+          .set({ state: "used", arrangementDate: date, position })
+          .where(eq(songs.id, id));
+      }
+    } else {
+      // 当天已排满且挤不动：保持 approved，不排入
       await tx
         .update(songs)
         .set({ state: "approved", arrangementDate: null, position: null })
-        .where(eq(songs.id, removedId));
+        .where(eq(songs.id, song.id));
+    }
+
+    // 被挤出当天排期的歌曲回到待排池
+    const evictedIds = plan.evicted
+      .filter(eviction => eviction.to === null)
+      .map(eviction => eviction.songId)
+      .filter(id => id !== song.id);
+    if (evictedIds.length > 0) {
+      await tx
+        .update(songs)
+        .set({ state: "approved", arrangementDate: null, position: null })
+        .where(inArray(songs.id, evictedIds));
     }
   });
 

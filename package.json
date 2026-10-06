@@ -26,7 +26,7 @@
     "lint:format": "npx prettier . --write",
     "husky:prepare": "npx husky-init && husky install",
     "init": "tsx scripts/initializer.ts",
-    "test": "vitest run server/utils/tests",
+    "test": "vitest run server/utils/tests --pool=threads",
     "test:server": "tsx scripts/testServer.ts"
   },
   "dependencies": {

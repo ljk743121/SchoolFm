@@ -63,24 +63,24 @@
       {{ songCount ? "手动排歌" : "自动排歌" }}
     </Button>
 
-    <Alert
-      v-if="arrangeResult && (arrangeResult.conflicts.length || arrangeResult.droppedCount || arrangeResult.evictedCount)"
-      variant="destructive"
-    >
-      <AlertTitle>排歌冲突提示</AlertTitle>
+    <Alert v-if="arrangeResult" variant="destructive">
+      <AlertTitle>排歌结果</AlertTitle>
       <AlertDescription>
-        <ScrollArea class="h-[200px] w-full max-w-full rounded-md border px-3 py-2">
+        <ScrollArea class="h-[220px] w-full max-w-full rounded-md border px-3 py-2">
           <p class="mb-2">
-            已安排 {{ arrangeResult.placedCount }} 首，舍弃 {{ arrangeResult.droppedCount }} 首，发现 {{ arrangeResult.conflicts.length }} 个期望日期冲突<template v-if="arrangeResult.evictedCount">
-              ，为安排期望日/欠播歌曲回退了 {{ arrangeResult.evictedCount }} 首普通歌曲
+            已安排 {{ arrangeResult.placedCount }} 首，落选 {{ arrangeResult.droppedCount }} 首，被挤出原排期 {{ arrangeResult.evictedCount }} 首，调期 {{ arrangeResult.adjustedCount }} 首<template v-if="arrangeResult.frozenDays.length">
+              ，跳过已锁定排期 {{ arrangeResult.frozenDays.length }} 天
             </template>。
           </p>
           <ul v-if="arrangeResult.conflicts.length" class="list-disc space-y-1 pl-5">
             <li v-for="conflict in arrangeResult.conflicts" :key="conflict.songId">
-              歌曲 #{{ conflict.songId }} 期望日期 {{ conflict.expectedDate }} {{ conflict.reason === 'unavailable' ? '不可用' : '已满' }}
-              <span v-if="conflict.suggestedDate">，已建议调整至 {{ conflict.suggestedDate }}</span>
+              歌曲 #{{ conflict.songId }}：期望 {{ conflict.expectedDate }}，实际排到 {{ conflict.actualDate }}
+              <span class="opacity-70">（{{ reasonLabel(conflict.reason) }}）</span>
             </li>
           </ul>
+          <p v-else class="opacity-70">
+            所有歌曲均排在期望日期。
+          </p>
         </ScrollArea>
       </AlertDescription>
     </Alert>
@@ -111,4 +111,17 @@ defineEmits<{
   (e: "update:songCount", value: number): void;
   (e: "arrange"): void;
 }>();
+
+type AdjustReason = RouterOutput["arrangements"]["arrange"]["conflicts"][number]["reason"];
+
+/** 调期原因：期望日已过 → 顺延补播；期望日当天已无空间 → 期望日已排满 */
+function reasonLabel(reason: AdjustReason) {
+  if (reason === "past")
+    return "期望日已过，顺延补播";
+  if (reason === "full")
+    return "期望日已排满";
+  if (reason === "frozen")
+    return "期望日不可排（已播放/已锁定）";
+  return "期望日已被固定占用占满";
+}
 </script>
