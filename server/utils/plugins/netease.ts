@@ -159,7 +159,7 @@ async function vkeyFetch(id: string) {
     method: "GET",
     params: {
       id,
-      quality: 2,
+      quality: 4,
     },
     parseResponse(responseText) {
       try {

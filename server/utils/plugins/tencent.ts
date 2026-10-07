@@ -262,7 +262,7 @@ async function vkeyFetch(mid: string) {
     method: "GET",
     params: {
       mid,
-      quality: 6,
+      quality: 8,
     },
     parseResponse(responseText) {
       try {
@@ -278,6 +278,40 @@ async function vkeyFetch(mid: string) {
       message: "第三方服务器繁忙，请稍后再试",
     });
   }
+  if (!resSongsUrl.data.url) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "获取VIP歌曲链接失败" });
+  }
+  return {
+    url: resSongsUrl.data.url.replace(/^http:/, "https:"),
+    pay: true,
+  };
+}
+
+async function vkey3Fetch(mid: string) {
+  const songBaseURL = mediaBaseURL.qqVkey3;
+  if (!songBaseURL)
+    throw new TRPCError({ code: "BAD_REQUEST", message: "服务器未配置请求源" });
+  interface TSongURL {
+    code: number;
+    data: {
+      url: string;
+    };
+  }
+
+  const resSongsUrl = await $fetch<TSongURL>(songBaseURL, {
+    method: "GET",
+    params: {
+      mid,
+      quality: 8,
+    },
+    parseResponse(responseText) {
+      try {
+        return JSON.parse(responseText);
+      } catch {
+        return responseText;
+      }
+    },
+  });
   if (!resSongsUrl.data.url) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "获取VIP歌曲链接失败" });
   }
@@ -307,6 +341,7 @@ export const qqmusic = createPlugin({
   getMusicUrl: [
     { fn: officialFetch, priority: 1, retryCount: 1 },
     { fn: metingapiFetch, priority: 0.9, retryCount: 1 },
-    { fn: vkeyFetch, priority: 0.8, retryCount: 4 },
+    { fn: vkey3Fetch, priority: 0.8, retryCount: 3 },
+    { fn: vkeyFetch, priority: 0.7, retryCount: 2 },
   ],
 });
