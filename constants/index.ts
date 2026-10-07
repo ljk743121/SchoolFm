@@ -63,7 +63,7 @@ export const resetPassword = "Abc123456";
 export const defaultVipSign = "vip-song";
 export const MAX_DAILY_SONG_DURATION = 45 * 60;
 // 每天开始播放的时间（HH:mm），用于预估歌曲播放时间
-export const START_TIME = "18:30";
+export const START_TIME = "17:30";
 export const SCHOOL_NAME = "实验之声广播站";
 
 export const searchBaseURL = {
@@ -82,6 +82,7 @@ export const mediaBaseURL = {
   qqMeting: "https://api.qijieya.cn/meting/?server=tencent&type=url&id=",
   wyVkey: "https://api.vkeys.cn/v2/music/netease",
   qqVkey: "https://api.vkeys.cn/v2/music/tencent/geturl",
+  qqVkey3: "https://api.vkeys.cn/music/tencent/song/link",
   bbOfficial: "https://api.bilibili.com/x/web-interface/view",
   bbOfficialm2: "https://api.bilibili.com/x/player/playurl",
 };
